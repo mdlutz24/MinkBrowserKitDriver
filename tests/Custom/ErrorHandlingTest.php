@@ -3,9 +3,14 @@
 namespace Behat\Mink\Tests\Driver\Custom;
 
 use Behat\Mink\Driver\BrowserKitDriver;
+use Behat\Mink\Exception\DriverException;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\BrowserKit\Client;
 use Symfony\Component\BrowserKit\Response;
+use Symfony\Component\BrowserKit\AbstractBrowser;
+use Symfony\Component\BrowserKit\Exception\BadMethodCallException;
+use PHPUnit\Framework\Constraint\Exception as ExceptionConstraint;
+use PHPUnit\Framework\Constraint\ExceptionMessage;
 
 class ErrorHandlingTest extends TestCase
 {
@@ -38,16 +43,36 @@ class ErrorHandlingTest extends TestCase
     }
 
     /**
-     * @expectedException \Behat\Mink\Exception\DriverException
-     * @expectedExceptionMessage Unable to access the response content before visiting a page
-     *
      * Looks like we have to mark these tests as "legacy", otherwise we get deprecation errors.
      * Although the deprecations are handled, there's no way to avoid the deprecation message here.
      * @group legacy
      */
     public function testFindWithoutVisit()
     {
-        $this->getDriver()->find('//html');
+        $exception = null;
+        try {
+            $this->getDriver()->find('//html');
+        } catch (\Exception $exception) {
+            // in next lines we have proper assert.
+        }
+
+        if ($exception instanceof BadMethodCallException) {
+            $expectedMessage = sprintf(
+                'The "request()" method must be called before "%s::getCrawler()".',
+                'Symfony\Component\BrowserKit\AbstractBrowser'
+            );
+            $this->assertException(
+                $exception,
+                'Symfony\Component\BrowserKit\Exception\BadMethodCallException'
+            );
+            $this->assertExceptionMessage($exception, $expectedMessage);
+            return;
+        }
+        $this->assertException($exception,'Behat\Mink\Exception\DriverException');
+        $this->assertExceptionMessage(
+            $exception,
+            'Unable to access the response content before visiting a page'
+        );
     }
 
     /**
@@ -163,32 +188,93 @@ HTML;
     {
         return new BrowserKitDriver($this->client);
     }
+
+    /**
+     * @param null|\Throwable $exception
+     * @param string          $expectedExceptionClass
+     */
+    private function assertException($exception, $expectedExceptionClass)
+    {
+        if (class_exists('\PHPUnit_Framework_Constraint_Exception')) {
+            $constraint = new \PHPUnit_Framework_Constraint_Exception($expectedExceptionClass);
+        } else {
+            $constraint = new ExceptionConstraint($expectedExceptionClass);
+        }
+        $this->assertThat($exception, $constraint);
+    }
+
+    /**
+     * @param null|\Throwable $exception
+     * @param string          $expectedMessage
+     */
+    private function assertExceptionMessage($exception, $expectedMessage)
+    {
+        if (class_exists('\PHPUnit_Framework_Constraint_ExceptionMessage')) {
+            $constraint = new \PHPUnit_Framework_Constraint_ExceptionMessage($expectedMessage);
+        } else {
+            $constraint = new ExceptionMessage($expectedMessage);
+        }
+        $this->assertThat($exception, $constraint);
+    }
 }
 
-class TestClient extends Client
-{
-    protected $nextResponse = null;
-    protected $nextScript = null;
+if (class_exists('\Symfony\Component\BrowserKit\AbstractBrowser')) {
 
-    public function setNextResponse(Response $response)
-    {
-        $this->nextResponse = $response;
-    }
+    class TestClient extends AbstractBrowser {
 
-    public function setNextScript($script)
-    {
-        $this->nextScript = $script;
-    }
+        protected $nextResponse = null;
+        protected $nextScript = null;
 
-    protected function doRequest($request)
-    {
-        if (null === $this->nextResponse) {
-            return new Response();
+        public function setNextResponse(Response $response)
+        {
+            $this->nextResponse = $response;
         }
 
-        $response = $this->nextResponse;
-        $this->nextResponse = null;
+        public function setNextScript($script)
+        {
+            $this->nextScript = $script;
+        }
 
-        return $response;
+        protected function doRequest($request)
+        {
+            if (null === $this->nextResponse) {
+                return new Response();
+            }
+
+            $response = $this->nextResponse;
+            $this->nextResponse = null;
+
+            return $response;
+        }
+    }
+
+} else {
+
+    class TestClient extends Client {
+
+        protected $nextResponse = null;
+        protected $nextScript = null;
+
+        public function setNextResponse(Response $response)
+        {
+            $this->nextResponse = $response;
+        }
+
+        public function setNextScript($script)
+        {
+            $this->nextScript = $script;
+        }
+
+        protected function doRequest($request)
+        {
+            if (null === $this->nextResponse) {
+                return new Response();
+            }
+
+            $response = $this->nextResponse;
+            $this->nextResponse = null;
+
+            return $response;
+        }
     }
 }
